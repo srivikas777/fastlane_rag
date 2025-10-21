@@ -1,0 +1,37 @@
+__label__schedule book Chen tomorrow
+__label__schedule schedule Rivera Monday 9am
+__label__schedule schedule an appointment for Chen tomorrow at 10:30
+__label__schedule book an appointment for Dr. Smith next week
+__label__schedule schedule Rivera for tomorrow morning
+__label__schedule book Chen for Monday at 9am in Midtown
+__label__schedule can you schedule Chen tomorrow
+__label__schedule I need to book Rivera for next Tuesday
+__label__schedule schedule appointment for Chen at 10:30am
+__label__schedule book a slot for Rivera tomorrow
+__label__schedule make an appointment for Chen on Monday
+__label__schedule schedule Chen for 10am tomorrow at Uptown
+__label__schedule reschedule to 11:00
+__label__schedule make it 11:00 instead
+__label__schedule change to 2pm
+__label__schedule move it to tomorrow
+__label__schedule reschedule the appointment to 3pm
+__label__schedule can you move it to 11:00
+__label__schedule change the time to 2:30pm
+__label__schedule make it Monday at 10am
+__label__knowledge what's our late policy
+__label__knowledge where do patients park
+__label__knowledge what are the office hours
+__label__knowledge how late can patients arrive
+__label__knowledge tell me about parking
+__label__knowledge what's the cancellation policy
+__label__knowledge where is the office located
+__label__knowledge do you have wheelchair access
+__label__knowledge what insurance do you accept
+__label__knowledge how do I prepare for my appointment
+__label__knowledge what should I bring
+__label__knowledge what's the grace period
+__label__knowledge can I bring someone with me
+__label__knowledge what are your payment options
+__label__knowledge how do I reschedule
+__label__knowledge what if I'm running late
+

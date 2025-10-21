@@ -1,0 +1,815 @@
+openapi: 3.0.0
+info:
+  title: FastLane RAG Orchestrator API
+  version: 2.0.0
+  description: |
+    Ultra-fast RAG orchestrator with text-based intent detection achieving <500ms end-to-end latency.
+    
+    ## Features
+    - **Fast Intent Detection**: ~5ms keyword-based pattern matching
+    - **Schedule Management**: Book and reschedule appointments with context awareness
+    - **Knowledge Retrieval**: RAG queries with citations and Redis caching
+    - **Dual Intent**: Parallel execution of schedule + knowledge queries
+    - **Multi-turn Conversations**: Context memory for rescheduling
+  contact:
+    name: FastLane RAG Team
+  license:
+    name: MIT
+
+servers:
+  - url: http://localhost:3002
+    description: Local development server
+
+tags:
+  - name: Knowledge Management
+    description: Document ingestion and knowledge base management
+  - name: Chat Processing
+    description: RAG queries with intent detection and dual-intent handling
+  - name: Appointments
+    description: Direct appointment scheduling, rescheduling, and management
+  - name: System
+    description: Health checks, statistics, and system management
+
+paths:
+  /knowledge:
+    post:
+      tags:
+        - Knowledge Management
+      summary: Upsert documents to knowledge base
+      description: |
+        Upload documents to the Qdrant knowledge base. Documents are chunked (512 tokens) 
+        and embedded using OpenAI text-embedding-3-small (512 dimensions).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - documents
+              properties:
+                documents:
+                  type: array
+                  items:
+                    type: object
+                    required:
+                      - id
+                      - text
+                    properties:
+                      id:
+                        type: string
+                        description: Unique document identifier
+                      text:
+                        type: string
+                        description: Document content
+                      tags:
+                        type: array
+                        items:
+                          type: string
+                        description: Optional tags for categorization
+            example:
+              documents:
+                - id: "policy-late"
+                  text: "Our late arrival policy allows patients a 10-minute grace period..."
+                  tags: ["policy", "late"]
+      responses:
+        '200':
+          description: Documents successfully upserted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  message:
+                    type: string
+                  document_count:
+                    type: integer
+                  chunk_count:
+                    type: integer
+              example:
+                ok: true
+                message: "Upserted 3 documents (3 chunks)"
+                document_count: 3
+                chunk_count: 3
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /knowledge/reset:
+    delete:
+      tags:
+        - Knowledge Management
+      summary: Reset Qdrant collection
+      description: Delete and recreate the Qdrant collection, removing all documents
+      responses:
+        '200':
+          description: Collection reset successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  message:
+                    type: string
+                  collection_name:
+                    type: string
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /chat:
+    post:
+      tags:
+        - Chat Processing
+      summary: Process RAG queries with intent detection
+      description: |
+        Main chat endpoint with fast text-based intent detection.
+        
+        **Supported Intents:**
+        - **Schedule**: Book appointments, reschedule with context
+        - **Knowledge**: Retrieve information from knowledge base
+        - **Dual Intent**: Execute both in parallel
+        
+        **Features:**
+        - Intent detection: ~5ms
+        - Entity extraction: chrono-node (dates), compromise (names)
+        - Context memory: 30-min TTL for multi-turn conversations
+        - Target latency: <500ms end-to-end
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - message
+              properties:
+                message:
+                  type: string
+                  description: User message
+                session_id:
+                  type: string
+                  description: Session identifier (auto-generated if not provided)
+            examples:
+              knowledge:
+                summary: Knowledge Query
+                value:
+                  message: "What is your late arrival policy?"
+                  session_id: "user-123"
+              schedule:
+                summary: Schedule Appointment
+                value:
+                  message: "Book Chen for tomorrow at 10:30 AM in Midtown"
+                  session_id: "user-123"
+              reschedule:
+                summary: Reschedule (using context)
+                value:
+                  message: "Make it 11:00 instead"
+                  session_id: "user-123"
+              dual:
+                summary: Dual Intent
+                value:
+                  message: "What is the late policy and book Rivera for tomorrow at 2pm in Uptown?"
+                  session_id: "user-456"
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  reply:
+                    type: string
+                    description: Assistant response
+                  citations:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Citation'
+                  plan_steps:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        step:
+                          type: string
+                        latency_ms:
+                          type: integer
+                  tool_calls:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ToolCall'
+                  latency_ms:
+                    type: integer
+                    description: Total end-to-end latency
+                  session_id:
+                    type: string
+              examples:
+                knowledge:
+                  summary: Knowledge Response
+                  value:
+                    reply: "Our late arrival policy allows patients a 10-minute grace period..."
+                    citations:
+                      - id: "policy-late"
+                        chunk: 0
+                        score: 0.95
+                        ref: 1
+                    plan_steps:
+                      - step: "intent_detection"
+                        detected: {"schedule": false, "knowledge": true}
+                        latency_ms: 1
+                      - step: "retrieve_knowledge"
+                        docs_found: 3
+                        latency_ms: 180
+                    latency_ms: 185
+                    session_id: "user-123"
+                schedule:
+                  summary: Schedule Response
+                  value:
+                    reply: "Booked Chen for Oct 21, 10:30 AM at Midtown (A-3758)."
+                    citations: []
+                    plan_steps:
+                      - step: "intent_detection"
+                        latency_ms: 0
+                      - step: "extract_entities"
+                        latency_ms: 46
+                      - step: "schedule_appointment"
+                        latency_ms: 3
+                    tool_calls:
+                      - name: "schedule_appointment"
+                        args:
+                          name: "Chen"
+                          slot: "2025-10-21T17:30:00.000Z"
+                          location: "Midtown"
+                        result:
+                          ok: true
+                          appt_id: "A-3758"
+                    latency_ms: 77
+                    session_id: "user-123"
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /tools/schedule_appointment:
+    post:
+      tags:
+        - Appointments
+      summary: Schedule an appointment
+      description: Direct API for scheduling appointments
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - patient
+                - preferred_slot_iso
+                - location
+              properties:
+                patient:
+                  type: string
+                  description: Patient name
+                preferred_slot_iso:
+                  type: string
+                  format: date-time
+                  description: Preferred time slot (ISO 8601)
+                location:
+                  type: string
+                  enum: [Midtown, Uptown, Downtown]
+                  description: Appointment location
+            example:
+              patient: "Chen"
+              preferred_slot_iso: "2025-10-21T17:30:00.000Z"
+              location: "Midtown"
+      responses:
+        '200':
+          description: Appointment scheduled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AppointmentResult'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /tools/reschedule_appointment:
+    post:
+      tags:
+        - Appointments
+      summary: Reschedule an appointment
+      description: Direct API for rescheduling existing appointments
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - appt_id
+                - new_slot_iso
+              properties:
+                appt_id:
+                  type: string
+                  description: Appointment ID to reschedule
+                new_slot_iso:
+                  type: string
+                  format: date-time
+                  description: New time slot (ISO 8601)
+            example:
+              appt_id: "A-3758"
+              new_slot_iso: "2025-10-21T18:00:00.000Z"
+      responses:
+        '200':
+          description: Appointment rescheduled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AppointmentResult'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Appointment not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /appointments:
+    get:
+      tags:
+        - Appointments
+      summary: List all appointments
+      description: Get a list of all scheduled appointments
+      responses:
+        '200':
+          description: List of appointments
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  appointments:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Appointment'
+                  count:
+                    type: integer
+              example:
+                appointments:
+                  - appt_id: "A-3758"
+                    patient: "Chen"
+                    normalized_slot_iso: "2025-10-21T17:30:00.000Z"
+                    location: "Midtown"
+                    status: "scheduled"
+                    created_at: "2025-10-20T22:21:50.600Z"
+                count: 1
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    delete:
+      tags:
+        - Appointments
+      summary: Delete all appointments
+      description: |
+        **⚠️ DANGER ZONE** - Permanently deletes ALL appointments from the system.
+        This action cannot be undone. Use with extreme caution.
+      responses:
+        '200':
+          description: All appointments deleted successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                    example: true
+                  deleted_count:
+                    type: integer
+                    example: 5
+                  message:
+                    type: string
+                    example: "Deleted 5 appointments"
+              example:
+                ok: true
+                deleted_count: 5
+                message: "Deleted 5 appointments"
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /appointments/{appt_id}:
+    get:
+      tags:
+        - Appointments
+      summary: Get appointment details
+      description: Retrieve details for a specific appointment
+      parameters:
+        - name: appt_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Appointment ID
+          example: "A-3758"
+      responses:
+        '200':
+          description: Appointment details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Appointment'
+        '404':
+          description: Appointment not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    delete:
+      tags:
+        - Appointments
+      summary: Cancel appointment
+      description: Cancel an existing appointment
+      parameters:
+        - name: appt_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Appointment ID
+          example: "A-3758"
+      responses:
+        '200':
+          description: Appointment cancelled
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  message:
+                    type: string
+        '404':
+          description: Appointment not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /health:
+    get:
+      tags:
+        - System
+      summary: Health check
+      description: Check the health status of the service and its dependencies
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [healthy]
+                  services:
+                    type: object
+                    properties:
+                      redis:
+                        type: string
+                      qdrant:
+                        type: string
+                      collections:
+                        type: integer
+                  timestamp:
+                    type: string
+                    format: date-time
+              example:
+                status: "healthy"
+                services:
+                  redis: "connected"
+                  qdrant: "connected"
+                  collections: 1
+                timestamp: "2025-10-20T22:21:38.936Z"
+        '503':
+          description: Service is unhealthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [unhealthy]
+                  error:
+                    type: string
+
+  /stats:
+    get:
+      tags:
+        - System
+      summary: Get system statistics
+      description: |
+        Get detailed system statistics including:
+        - Qdrant data points count
+        - Active sessions in Redis
+        - Cached queries count
+        - Scheduled appointments (total, active, cancelled)
+        - Appointments by location and patient
+      responses:
+        '200':
+          description: System statistics
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  timestamp:
+                    type: string
+                    format: date-time
+                  qdrant:
+                    type: object
+                    properties:
+                      collection_name:
+                        type: string
+                      points_count:
+                        type: integer
+                        description: Number of data points in Qdrant
+                      vectors_count:
+                        type: integer
+                  redis:
+                    type: object
+                    properties:
+                      sessions:
+                        type: integer
+                        description: Active sessions count
+                      cache:
+                        type: object
+                        properties:
+                          embeddings:
+                            type: integer
+                          query_results:
+                            type: integer
+                          answers:
+                            type: integer
+                  appointments:
+                    type: object
+                    properties:
+                      total_count:
+                        type: integer
+                      active_count:
+                        type: integer
+                      cancelled_count:
+                        type: integer
+                      by_location:
+                        type: object
+                        additionalProperties:
+                          type: integer
+                      by_patient:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            patient:
+                              type: string
+                            count:
+                              type: integer
+              example:
+                ok: true
+                timestamp: "2025-10-20T21:43:50.322Z"
+                qdrant:
+                  collection_name: "fastlane_knowledge"
+                  points_count: 4
+                  vectors_count: 0
+                redis:
+                  sessions: 0
+                  cache:
+                    embeddings: 0
+                    query_results: 0
+                    answers: 0
+                appointments:
+                  total_count: 0
+                  active_count: 0
+                  cancelled_count: 0
+                  by_location: {}
+                  by_patient: []
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /cache/clear:
+    delete:
+      tags:
+        - System
+      summary: Clear all caches
+      description: Clear all Redis caches including query results, embeddings, and session memory
+      responses:
+        '200':
+          description: Caches cleared
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  message:
+                    type: string
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /debug/sessions:
+    get:
+      tags:
+        - System
+      summary: View session memory
+      description: Debug endpoint to view all active session memory (for development)
+      responses:
+        '200':
+          description: Session memory data
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  session_count:
+                    type: integer
+                  sessions:
+                    type: object
+                    additionalProperties:
+                      type: object
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+components:
+  schemas:
+    Citation:
+      type: object
+      properties:
+        id:
+          type: string
+          description: Document ID
+        chunk:
+          type: integer
+          description: Chunk index
+        score:
+          type: number
+          format: float
+          description: Relevance score
+        ref:
+          type: integer
+          description: Reference number
+
+    ToolCall:
+      type: object
+      properties:
+        name:
+          type: string
+          description: Tool function name
+        args:
+          type: object
+          description: Tool arguments
+        result:
+          type: object
+          description: Tool execution result
+
+    Appointment:
+      type: object
+      properties:
+        appt_id:
+          type: string
+          description: Appointment ID
+        patient:
+          type: string
+          description: Patient name
+        normalized_slot_iso:
+          type: string
+          format: date-time
+          description: Appointment time (ISO 8601)
+        location:
+          type: string
+          description: Appointment location
+        status:
+          type: string
+          enum: [scheduled, cancelled]
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    AppointmentResult:
+      type: object
+      properties:
+        ok:
+          type: boolean
+        appt_id:
+          type: string
+        patient:
+          type: string
+        normalized_slot_iso:
+          type: string
+          format: date-time
+        location:
+          type: string
+        status:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        error:
+          type: string
+          description: Error message if ok is false
+
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+          description: Error message
+        details:
+          type: string
+          description: Additional error details
+
