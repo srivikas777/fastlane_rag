@@ -246,8 +246,24 @@ class Orchestrator {
       };
     } else {
       const totalLatency = Number(process.hrtime.bigint() - startTime) / 1000000;
+      
+      // Special message for duplicate bookings
+      let replyMessage;
+      if (result.error === 'Already booked') {
+        const dateStr = chronoDate ? new Date(chronoDate).toLocaleString('en-US', {
+          month: 'short',
+          day: 'numeric',
+          hour: 'numeric',
+          minute: '2-digit',
+          hour12: true
+        }) : 'that time';
+        replyMessage = `I see that ${name} already has a scheduled appointment at ${dateStr}. Would you like to reschedule to a different time?`;
+      } else {
+        replyMessage = `Failed to schedule appointment: ${result.error}`;
+      }
+      
       return {
-        reply: `Failed to schedule appointment: ${result.error}`,
+        reply: replyMessage,
         citations: [],
         plan_steps: planSteps,
         latency_ms: Math.round(totalLatency)
@@ -438,25 +454,37 @@ class Orchestrator {
       replyParts.push(knowledgeResult.reply);
     }
 
-    if (scheduleResult && scheduleResult.result && scheduleResult.result.ok) {
-      const dateStr = new Date(scheduleResult.result.normalized_slot_iso).toLocaleString('en-US', {
-        month: 'short',
-        day: 'numeric',
-        hour: 'numeric',
-        minute: '2-digit',
-        hour12: true
-      });
-      replyParts.push(`Booked ${scheduleResult.name} for ${dateStr} at ${scheduleResult.location} (${scheduleResult.result.appt_id}).`);
-      
-      toolCalls.push({
-        name: 'schedule_appointment',
-        args: {
-          name: scheduleResult.name,
-          slot: scheduleResult.chronoDate,
-          location: scheduleResult.location
-        },
-        result: scheduleResult.result
-      });
+    if (scheduleResult && scheduleResult.result) {
+      if (scheduleResult.result.ok) {
+        const dateStr = new Date(scheduleResult.result.normalized_slot_iso).toLocaleString('en-US', {
+          month: 'short',
+          day: 'numeric',
+          hour: 'numeric',
+          minute: '2-digit',
+          hour12: true
+        });
+        replyParts.push(`Booked ${scheduleResult.name} for ${dateStr} at ${scheduleResult.location} (${scheduleResult.result.appt_id}).`);
+        
+        toolCalls.push({
+          name: 'schedule_appointment',
+          args: {
+            name: scheduleResult.name,
+            slot: scheduleResult.chronoDate,
+            location: scheduleResult.location
+          },
+          result: scheduleResult.result
+        });
+      } else if (scheduleResult.result.error === 'Already booked') {
+        // Handle duplicate booking in dual intent - make it conversational
+        const dateStr = scheduleResult.chronoDate ? new Date(scheduleResult.chronoDate).toLocaleString('en-US', {
+          month: 'short',
+          day: 'numeric',
+          hour: 'numeric',
+          minute: '2-digit',
+          hour12: true
+        }) : 'that time';
+        replyParts.push(`By the way, ${scheduleResult.name} already has a scheduled appointment at ${dateStr}.`);
+      }
     }
 
     const totalLatency = Number(process.hrtime.bigint() - startTime) / 1000000;

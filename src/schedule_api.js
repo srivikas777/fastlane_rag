@@ -44,9 +44,6 @@ class ScheduleAPI {
         };
       }
 
-      // Generate unique appointment ID
-      const apptId = await this.generateApptId();
-
       // Normalize slot to ISO
       const slotDate = new Date(slot);
       if (isNaN(slotDate.getTime())) {
@@ -56,11 +53,34 @@ class ScheduleAPI {
         };
       }
 
+      const normalizedSlot = slotDate.toISOString();
+
+      // Check for duplicate booking - same patient, same time slot
+      const allAppointments = await this.getAllAppointments();
+      const duplicateBooking = allAppointments.find(appt => 
+        appt.patient === name && 
+        appt.normalized_slot_iso === normalizedSlot &&
+        appt.status === 'scheduled'
+      );
+      
+      if (duplicateBooking) {
+        console.log(`[SCHEDULE_API] Duplicate booking detected - ${name} already has appointment ${duplicateBooking.appt_id} at ${normalizedSlot}`);
+        return {
+          ok: false,
+          error: 'Already booked',
+          message: `${name} already has an appointment at ${normalizedSlot}`,
+          existing_appt_id: duplicateBooking.appt_id
+        };
+      }
+
+      // Generate unique appointment ID
+      const apptId = await this.generateApptId();
+
       // Create appointment record
       const appointment = {
         appt_id: apptId,
         patient: name,
-        normalized_slot_iso: slotDate.toISOString(),
+        normalized_slot_iso: normalizedSlot,
         location: location,
         status: 'scheduled',
         created_at: new Date().toISOString()
