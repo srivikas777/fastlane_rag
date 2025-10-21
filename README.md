@@ -5,6 +5,7 @@ Ultra-fast RAG orchestrator with text-based intent detection achieving **<500ms 
 ## 🚀 Quick Start
 
 ### Prerequisites
+- Git LFS (for cloning the repository with large files)
 - Node.js (v14+)
 - Redis server
 - Qdrant vector database
